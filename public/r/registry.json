@@ -1,0 +1,25 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "next1foreal",
+  "homepage": "https://github.com/next1foreal-dotcom/ui-registry",
+  "items": [
+    {
+      "name": "split-view",
+      "type": "registry:ui",
+      "title": "Split View",
+      "description": "Draggable split view with magnetic snap points, spring settle, double-click reset, collapsible panes and persisted sizes. Built on motion-panels 0.6.x.",
+      "dependencies": ["motion-panels@~0.6.1", "motion"],
+      "registryDependencies": ["utils"],
+      "files": [
+        {
+          "path": "registry/split-view/split-view.tsx",
+          "type": "registry:ui"
+        },
+        {
+          "path": "registry/split-view/split-view-physics.ts",
+          "type": "registry:ui"
+        }
+      ]
+    }
+  ]
+}
