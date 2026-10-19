@@ -39,6 +39,19 @@ export interface SplitViewApi {
   getCollapsed: () => boolean[]
 }
 
+/**
+ * Overrides used while the SplitView itself (its container, not the window) is
+ * narrower than `below` px (shorter, when vertical). Sizes and collapsed state
+ * are kept and persisted separately for the narrow layout.
+ */
+export interface SplitViewNarrow {
+  below: number
+  defaultSizes?: (SplitViewSize | undefined)[]
+  minSizes?: (SplitViewSize | undefined)[]
+  maxSizes?: (SplitViewSize | undefined)[]
+  defaultCollapsed?: boolean[]
+}
+
 export interface SplitViewProps
   extends Omit<React.HTMLAttributes<HTMLDivElement>, "children" | "onResize"> {
   /** Two or three panes. The pane at `fill` takes the remaining space. */
@@ -58,6 +71,8 @@ export interface SplitViewProps
   collapsed?: boolean[]
   defaultCollapsed?: boolean[]
   onCollapsedChange?: (collapsed: boolean[]) => void
+  /** Different sizes for small containers (phones), e.g. `{ below: 600, defaultSizes: ["45%"] }`. */
+  narrow?: SplitViewNarrow
   /** Separator positions as fractions of the group, e.g. `[0.25, 0.5, 0.75]`. `[]` disables. */
   snapPoints?: number[]
   /** Magnet radius in px around each snap point. Default `30`. */
@@ -393,13 +408,14 @@ function SplitView({
   children,
   orientation = "horizontal",
   fill = 1,
-  defaultSizes,
-  minSizes,
-  maxSizes,
+  defaultSizes: defaultSizesProp,
+  minSizes: minSizesProp,
+  maxSizes: maxSizesProp,
+  narrow,
   collapsible = false,
   collapseThreshold = 0.5,
   collapsed: collapsedProp,
-  defaultCollapsed,
+  defaultCollapsed: defaultCollapsedProp,
   onCollapsedChange,
   snapPoints = DEFAULT_SNAPS,
   magnetRange = 30,
@@ -427,24 +443,78 @@ function SplitView({
   const vertical = orientation === "vertical"
   const fillIndex = Math.min(Math.max(fill, 0), count - 1)
   const sized = (i: number) => i !== fillIndex
+  const rootRef = React.useRef<HTMLDivElement>(null)
 
-  const defaultsKey = JSON.stringify(defaultSizes ?? null)
-  const defaults = React.useMemo(() => {
-    const given = JSON.parse(defaultsKey) as (SplitViewSize | null)[] | null
-    return Array.from({ length: count }, (_, i) =>
+  // Narrow layout: decided by the container's own size, measured before paint.
+  // First guess from the window (a container is never wider than it), so a phone
+  // renders the narrow sizes on the very first paint; the observer refines it.
+  const [isNarrow, setIsNarrow] = React.useState(
+    () =>
+      narrow !== undefined &&
+      typeof window !== "undefined" &&
+      (vertical ? window.innerHeight : window.innerWidth) < narrow.below
+  )
+  const narrowNow = React.useRef(isNarrow)
+  const pick = <T,>(wide: T, small: T | undefined, n: boolean) => (n && small !== undefined ? small : wide)
+  const defaultSizes = pick(defaultSizesProp, narrow?.defaultSizes, isNarrow)
+  const minSizes = pick(minSizesProp, narrow?.minSizes, isNarrow)
+  const maxSizes = pick(maxSizesProp, narrow?.maxSizes, isNarrow)
+  const defaultCollapsed = pick(defaultCollapsedProp, narrow?.defaultCollapsed, isNarrow)
+  const storeKey = (n: boolean) => (persistKey && n ? `${persistKey}:narrow` : persistKey)
+
+  const defaultsFor = (given: (SplitViewSize | undefined | null)[] | undefined) =>
+    Array.from({ length: count }, (_, i) =>
       i === fillIndex ? null : (given?.[i] ?? ((count === 3 ? "25%" : "50%") as SplitViewSize))
     )
-  }, [count, fillIndex, defaultsKey])
+  const defaultsKey = JSON.stringify(defaultSizes ?? null)
+  const defaults = React.useMemo(
+    () => defaultsFor(JSON.parse(defaultsKey) as (SplitViewSize | null)[] | null ?? undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [count, fillIndex, defaultsKey]
+  )
 
   const [sizes, setSizes] = React.useState<(SplitViewSize | null)[]>(
-    () => storage.get(persistKey, count)?.s ?? defaults
+    () => storage.get(storeKey(isNarrow), count)?.s ?? defaults
   )
   const [collapsedState, setCollapsedState] = React.useState<boolean[]>(
     () =>
-      storage.get(persistKey, count)?.c ??
+      storage.get(storeKey(isNarrow), count)?.c ??
       panes.map((_, i) => !!defaultCollapsed?.[i])
   )
+
+  // Switch layouts (and their remembered sizes) when the container crosses `below`.
+  const narrowBelow = narrow?.below
+  React.useLayoutEffect(() => {
+    const el = rootRef.current
+    if (!el || narrowBelow === undefined) return
+    const check = () => {
+      const px = vertical ? el.clientHeight : el.clientWidth
+      if (px === 0) return // detached / hidden: keep the current layout
+      const next = px < narrowBelow
+      if (next === narrowNow.current) return
+      narrowNow.current = next
+      const n = narrowRef.current
+      const stored = storage.get(storeKey(next), count)
+      setIsNarrow(next)
+      setSizes(stored?.s ?? defaultsFor(next ? (n?.defaultSizes ?? defaultSizesRef.current) : defaultSizesRef.current))
+      const dc = next ? (n?.defaultCollapsed ?? defaultCollapsedRef.current) : defaultCollapsedRef.current
+      setCollapsedState(stored?.c ?? Array.from({ length: count }, (_, i) => !!dc?.[i]))
+    }
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narrowBelow, vertical, count, persistKey])
   const collapsed = collapsedProp ?? collapsedState
+  const narrowRef = React.useRef(narrow)
+  const defaultSizesRef = React.useRef(defaultSizesProp)
+  const defaultCollapsedRef = React.useRef(defaultCollapsedProp)
+  React.useLayoutEffect(() => {
+    narrowRef.current = narrow
+    defaultSizesRef.current = defaultSizesProp
+    defaultCollapsedRef.current = defaultCollapsedProp
+  })
 
   // Keep arrays in step if the number of panes changes.
   const safeSizes = sizes.length === count ? sizes : defaults
@@ -453,9 +523,10 @@ function SplitView({
     latest.current = { sizes: safeSizes, collapsed }
   })
 
+  const activeKey = storeKey(isNarrow)
   React.useEffect(() => {
-    storage.set(persistKey, { s: safeSizes, c: collapsed })
-  }, [persistKey, safeSizes, collapsed])
+    storage.set(activeKey, { s: safeSizes, c: collapsed })
+  }, [activeKey, safeSizes, collapsed])
 
   const commitSizes = React.useCallback(
     (next: (SplitViewSize | null)[]) => {
@@ -493,7 +564,6 @@ function SplitView({
     })
   )
 
-  const rootRef = React.useRef<HTMLDivElement>(null)
   const guidesRef = React.useRef<HTMLDivElement>(null)
   const badgeRef = React.useRef<HTMLDivElement>(null)
   usePointerSafety(rootRef)

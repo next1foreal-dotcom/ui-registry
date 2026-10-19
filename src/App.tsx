@@ -135,6 +135,8 @@ export default function App() {
         defaultSizes={[256]}
         minSizes={[200]}
         maxSizes={[400]}
+        // Phones / narrow containers: the sidebar may take at most half the width.
+        narrow={{ below: 600, defaultSizes: ['45%'], minSizes: ['30%'], maxSizes: ['50%'] }}
         overshoot={14}
         collapsible
         snapPoints={[]}
