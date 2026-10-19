@@ -555,6 +555,7 @@ function SplitView({
       snapPoints.length > 0
         ? { points: snapPoints, zone: magnetRange, strength: magnetStrength, extent }
         : { points: [], zone: 0, strength: 0, extent },
+    rtl: () => !vertical && !!rootRef.current && getComputedStyle(rootRef.current).direction === "rtl",
     onStart: () => setDragging(true),
     onFrame,
     onEnd: () => setDragging(false),

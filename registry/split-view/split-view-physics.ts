@@ -13,6 +13,9 @@
  *    collapse toggle) is re-driven by a real spring that keeps velocity
  *  - collapse while dragging: crossing the threshold springs shut/open
  *    instead of jumping, then hands control back to the pointer seamlessly
+ *  - keyboard: Shift+Arrow jumps the separator to the next snap point in that
+ *    direction (plain Arrow keeps motion-panels' small step); with no snap
+ *    point left that way it falls back to the big step (clamped at the limit)
  *
  * Everything runs on MotionValues; React does not re-render during a drag.
  *
@@ -62,6 +65,8 @@ export interface PhysicsOptions {
   /** Collapse when dragged below `minSize * collapseThreshold` (0..1). */
   collapseThreshold: number
   magnet?: MagnetConfig
+  /** Right-to-left horizontal layout. Shift+Arrow snap-jumping is skipped (falls back to the big step). */
+  rtl?: () => boolean
   onStart?: () => void
   onFrame?: (frame: DragFrame) => void
   onEnd?: () => void
@@ -88,6 +93,7 @@ export function attachPhysics(c: PanelController, opts: PhysicsOptions): PanelPh
   const { size, content } = c.motion
   const drag = c.drag
   const orig = { start: drag.start, move: drag.move, end: drag.end, cancel: drag.cancel }
+  const origKey = c.resizeByKey
   const root = document.documentElement
   const release = { pending: false, inZone: false, fraction: 0 }
 
@@ -289,10 +295,44 @@ export function attachPhysics(c: PanelController, opts: PhysicsOptions): PanelPh
     finish()
   }
 
+  // Shift+Arrow: jump to the next reachable snap point in the arrow's direction.
+  // Arrow right/down always moves the separator towards the group end.
+  c.resizeByKey = (event) => {
+    const fwd = opts.axis === "x" ? "ArrowRight" : "ArrowDown"
+    const back = opts.axis === "x" ? "ArrowLeft" : "ArrowUp"
+    const pts = opts.magnet?.points ?? []
+    if (!event.shiftKey || (event.key !== fwd && event.key !== back) || pts.length === 0 || opts.rtl?.()) {
+      return origKey(event)
+    }
+    const E = extent()
+    const { min, max } = c.bounds()
+    const here = toPos(c.options.collapsed ? 0 : c.target)
+    const dir = event.key === fwd ? 1 : -1
+    const reachable = pts
+      .map((p) => p * E)
+      .filter((pos) => {
+        const s = fromPos(pos)
+        return s >= min - 0.5 && s <= max + 0.5
+      })
+    const ahead = reachable.filter((pos) => (pos - here) * dir > 1).sort((a, b) => (a - b) * dir)
+    if (ahead.length === 0) return origKey(event)
+    event.preventDefault()
+    // Same encoding as a magnet release: exact percentage, or px for px panels.
+    const fraction = before() ? ahead[0] / E : 1 - ahead[0] / E
+    const value = Math.min(Math.max(fraction * E, min), max)
+    if (c.options.collapsed && value > 0) c.options.onCollapsedChange?.(false)
+    const out =
+      typeof c.options.size === "string"
+        ? (`${Math.round((value / E) * 1e4) / 100}%` as `${number}%`)
+        : Math.round(value)
+    c.options.onSizeChange?.(out)
+  }
+
   return {
     release,
     dispose: () => {
       Object.assign(drag, orig)
+      c.resizeByKey = origKey
       unsubscribe()
       watch()
       if (root.classList.contains("split-view-resizing")) finish()
