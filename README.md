@@ -11,6 +11,8 @@
 - **双击分隔线**：恢复默认尺寸
 - **可折叠**：拖过阈值时弹簧收起或展开；收起后边缘有小把手，点一下就能打开
 - **记住尺寸**：传 `persistKey`，尺寸和折叠状态会保存在 localStorage
+- **窄屏布局**：传 `narrow`，容器（不是窗口）窄于指定宽度时换一套尺寸，比如手机上侧边栏最多占一半
+- **键盘跳吸附点**：聚焦分隔线后 `Shift + ←/→` 直接跳到那个方向的下一个吸附点
 - **横向 / 纵向**，支持 2 或 3 栏（3 栏时中间那栏自适应），更多栏可以嵌套
 - 拖动时 React 不会重新渲染，480 张卡片的页面也能跑到约 60fps
 - 只用 shadcn 的语义色（`border`、`primary`、`popover`、`foreground`、`muted-foreground`），自动跟随你的主题
@@ -116,6 +118,7 @@ export function App() {
 | `collapseThreshold` | `number` | `0.5` | 拖到 `minSize × 阈值` 以下就折叠 |
 | `collapsed` / `defaultCollapsed` | `boolean[]` | — | 受控 / 非受控的折叠状态 |
 | `onCollapsedChange` | `(collapsed: boolean[]) => void` | — | 折叠状态变化时调用 |
+| `narrow` | `{ below, defaultSizes?, minSizes?, maxSizes?, defaultCollapsed? }` | — | 容器宽度（纵向时是高度）小于 `below` px 时改用这里的尺寸。窄屏和宽屏的尺寸、折叠状态分开记忆（`split-view:<key>:narrow`） |
 | `overshoot` | `number \| boolean` | `12` | 超出最小或最大尺寸时的橡皮筋距离（px） |
 | `persistKey` | `string` | — | 存到 localStorage 的 `split-view:<key>` |
 | `onResize` | `(sizes: (Size \| null)[]) => void` | — | 尺寸确定后调用（不是每一帧都调用），自适应栏为 `null` |
@@ -126,7 +129,25 @@ export function App() {
 | `apiRef` | `Ref<SplitViewApi>` | — | 命令式接口：`collapse(i)`、`expand(i)`、`toggle(i)`、`reset()`、`getSizes()`、`getCollapsed()` |
 | `className` 及其他 div 属性 | — | — | 加在最外层容器上 |
 
-键盘：聚焦分隔线后，用 `←` `→`（纵向是 `↑` `↓`）调整，按住 `Shift` 步子更大，`Home` / `End` 到最小 / 最大，`Enter` 折叠或展开，`Esc` 取消拖动。
+键盘：聚焦分隔线后，用 `←` `→`（纵向是 `↑` `↓`）小步调整；按住 `Shift` 会直接跳到这个方向的下一个吸附点，这个方向没有吸附点了（或者 `snapPoints={[]}`）就退回大步调整，到最小 / 最大为止。`Home` / `End` 到最小 / 最大，`Enter` 折叠或展开，`Esc` 取消拖动。`aria-valuenow` 会跟着更新。
+
+窄屏示例（手机上侧边栏最多占一半宽度，桌面上不变）：
+
+```tsx
+<SplitView
+  defaultSizes={[256]}
+  minSizes={[200]}
+  maxSizes={[400]}
+  narrow={{ below: 600, defaultSizes: ["45%"], minSizes: ["30%"], maxSizes: ["50%"] }}
+  collapsible
+  snapPoints={[]}
+>
+  <Sidebar />
+  <Main />
+</SplitView>
+```
+
+判断用的是容器自己的宽度（ResizeObserver），首屏先用窗口宽度粗判，所以手机上第一帧就是窄屏尺寸，不会先大后缩。
 
 ### 关于 motion-panels 的版本锁定
 
@@ -139,7 +160,7 @@ export function App() {
 - 用到 `localStorage` 和 DOM，文件开头有 `"use client"`。在 Next.js 里如果用了 `persistKey`，首屏服务端渲染出来的是默认尺寸，跟客户端恢复的尺寸可能不一样，必要时放进只在客户端渲染的组件里
 - 一个分组最多 3 栏（motion-panels 的限制：开始端、自适应、结束端各一个），更多栏请嵌套
 - 拖动时会给 `<html>` 加上 `split-view-resizing` 类，统一光标并禁止选中文字。全局样式只会注入一次（`<style id="split-view-styles">`）
-- 暂未针对 RTL 布局测试
+- 暂未针对 RTL 布局测试；RTL 下 `Shift + 方向键` 不跳吸附点，只做大步调整
 
 ## 本仓库开发
 
