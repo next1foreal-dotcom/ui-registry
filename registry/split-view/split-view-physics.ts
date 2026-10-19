@@ -15,6 +15,14 @@
  *    instead of jumping, then hands control back to the pointer seamlessly
  *
  * Everything runs on MotionValues; React does not re-render during a drag.
+ *
+ * Reduced motion: Motion applies a `duration: 0` animation on the *next frame*
+ * and `value.jump()` can't cancel it. motion-panels uses exactly that for every
+ * fold when `prefers-reduced-motion: reduce`, so a transient fold (e.g. a
+ * percentage panel measured while detached during a StrictMode remount, which
+ * reads 0) lands one frame after the panel was already put at its real size and
+ * leaves it at 0. Under reduced motion we therefore jump synchronously instead
+ * of animating, and pin the panel to its target whenever it drifts while idle.
  */
 import { animate, type AnimationPlaybackControls, type Transition } from "motion"
 import { grips, reducedMotion, type PanelController } from "motion-panels"
@@ -70,8 +78,7 @@ export interface PanelPhysics {
   dispose: () => void
 }
 
-const instant = { duration: 0 }
-const t = (tr: Transition) => (reducedMotion.get() ? instant : tr)
+const reduced = () => reducedMotion.get()
 
 export function controllerFor(separator: Element | null): PanelController | undefined {
   return separator ? grips.partners([separator as HTMLElement], null)[0] : undefined
@@ -111,12 +118,35 @@ export function attachPhysics(c: PanelController, opts: PhysicsOptions): PanelPh
     const to = c.target
     const from = size.get()
     if (Math.abs(from - to) < 0.5) return
-    const tr = t(from === 0 || to === 0 ? opts.collapse : opts.settle)
+    if (reduced()) return pin()
+    const tr = from === 0 || to === 0 ? opts.collapse : opts.settle
     const velocity = carry ?? size.getVelocity()
     carry = null
     settleAnim = animate(size, to, { ...tr, velocity } as Transition)
     if (from > 0 && to > 0) animate(content, to, tr)
   }
+  /** Reduced motion: put size (and content, when open) on the target right now. */
+  const pin = () => {
+    if (c.state.dragging) return
+    const to = c.target
+    settleAnim?.stop()
+    carry = null
+    if (Math.abs(size.get() - to) >= 0.5) size.jump(to)
+    if (to > 0 && Math.abs(content.get() - to) >= 0.5) content.jump(to)
+  }
+  // A deferred instant fold can still land after we pinned; correct it on the
+  // same frame. Only active under reduced motion, never during a drag.
+  let pinQueued = false
+  const watch = size.on("change", () => {
+    if (!reduced() || c.state.dragging || pinQueued) return
+    if (Math.abs(size.get() - c.target) < 0.5) return
+    pinQueued = true
+    queueMicrotask(() => {
+      pinQueued = false
+      if (reduced()) pin()
+    })
+  })
+  if (reduced()) pin()
   const unsubscribe = c.subscribe(() => queueMicrotask(springToTarget))
 
   const frame: DragFrame = { size: 0, ratio: 0, position: 0, active: null, entered: false, limit: null }
@@ -213,10 +243,11 @@ export function attachPhysics(c: PanelController, opts: PhysicsOptions): PanelPh
       chasing = true
     }
     if (chasing) {
-      if (Math.abs(prev - next) < 1.5 && Math.abs(v) < 60) chasing = false
+      // Reduced motion: orig.move already jumped to the new size; no chase.
+      if (reduced() || (Math.abs(prev - next) < 1.5 && Math.abs(v) < 60)) chasing = false
       else {
         size.jump(prev)
-        animate(size, next, { ...t(shut ? opts.collapse : opts.follow), velocity: v } as Transition)
+        animate(size, next, { ...(shut ? opts.collapse : opts.follow), velocity: v } as Transition)
       }
     }
     emit()
@@ -263,6 +294,7 @@ export function attachPhysics(c: PanelController, opts: PhysicsOptions): PanelPh
     dispose: () => {
       Object.assign(drag, orig)
       unsubscribe()
+      watch()
       if (root.classList.contains("split-view-resizing")) finish()
     },
   }
